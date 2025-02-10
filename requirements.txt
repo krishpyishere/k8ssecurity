@@ -1,0 +1,5 @@
+kubernetes==29.0.0
+rich==13.7.0
+requests==2.31.0
+PyYAML==6.0.1
+docker==7.0.0 

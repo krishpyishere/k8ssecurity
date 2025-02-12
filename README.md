@@ -1,4 +1,4 @@
-# Kubernetes Security Checker
+# Kubernetes Security Scanner
 
 A comprehensive security scanning tool for Kubernetes clusters that identifies security issues, misconfigurations, and potential vulnerabilities.
 

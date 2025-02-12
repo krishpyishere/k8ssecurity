@@ -39,6 +39,14 @@ The script checks for:
 - Hidden layer analysis
 - Environment information gathering
 
+### Software Bill of Materials (SBOM)
+- Container image dependency analysis
+- Vulnerability scanning using Grype
+- Detection of outdated packages
+- Identification of deprecated components
+- CVE tracking and reporting
+- Package version analysis
+
 ## Prerequisites
 
 - Python 3.7+
@@ -46,6 +54,7 @@ The script checks for:
 - Access to a Kubernetes cluster
 - `kubectl` configured with proper cluster access
 - `kube-bench` installed (optional, for CIS benchmark scanning)
+- `syft` and `grype` installed (for SBOM analysis)
 
 ## Installation
 
@@ -87,6 +96,24 @@ On Linux:
 ```bash
 curl -L https://github.com/aquasecurity/kube-bench/releases/download/v0.6.2/kube-bench_0.6.2_linux_amd64.deb -o kube-bench.deb
 sudo dpkg -i kube-bench.deb
+```
+
+### Installing SBOM Tools
+
+For SBOM analysis, install Syft and Grype:
+
+On macOS:
+```bash
+brew tap anchore/syft
+brew install syft
+brew tap anchore/grype
+brew install grype
+```
+
+On Linux:
+```bash
+curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
 ```
 
 ## Setting Up a Test Environment

@@ -12,6 +12,7 @@ from rich.progress import Progress
 import yaml
 import requests
 from pathlib import Path
+import tempfile
 
 class K8sSecurityChecker:
     def __init__(self):
@@ -22,9 +23,21 @@ class K8sSecurityChecker:
             self.apps_v1 = client.AppsV1Api()
             self.rbac_v1 = client.RbacAuthorizationV1Api()
             self.console = Console()
+            
+            # Check for SBOM tools
+            self.has_syft = self._check_tool_installed("syft")
+            self.has_grype = self._check_tool_installed("grype")
         except Exception as e:
             print(f"Error initializing Kubernetes client: {e}")
             sys.exit(1)
+
+    def _check_tool_installed(self, tool_name: str) -> bool:
+        """Check if a tool is installed."""
+        try:
+            subprocess.run(["which", tool_name], capture_output=True, check=True)
+            return True
+        except subprocess.CalledProcessError:
+            return False
 
     def check_pod_security(self, namespace: str = "default") -> List[Dict]:
         issues = []
@@ -218,32 +231,319 @@ class K8sSecurityChecker:
             print(f"Error checking sensitive keys: {e}")
         return issues
 
+    def check_sbom(self, namespace: str = "default") -> List[Dict]:
+        """Check Software Bill of Materials (SBOM) for container images."""
+        issues = []
+        
+        if not self.has_syft or not self.has_grype:
+            issues.append({
+                "pod": "N/A",
+                "container": "System",
+                "issue": "SBOM tools (syft/grype) not installed - cannot perform deep dependency analysis",
+                "severity": "INFO"
+            })
+            return issues
+
+        try:
+            pods = self.v1.list_namespaced_pod(namespace)
+            
+            for pod in pods.items:
+                pod_name = pod.metadata.name
+                
+                for container in pod.spec.containers:
+                    image = container.image
+                    sbom_issues = self._analyze_container_sbom(pod_name, container.name, image)
+                    issues.extend(sbom_issues)
+                    
+        except Exception as e:
+            print(f"Error checking SBOM: {e}")
+        
+        return issues
+
+    def _analyze_container_sbom(self, pod_name: str, container_name: str, image: str) -> List[Dict]:
+        """Analyze a container's SBOM using syft and grype."""
+        issues = []
+        
+        try:
+            # Generate SBOM using syft
+            syft_cmd = ["syft", image, "-o", "json"]
+            syft_result = subprocess.run(syft_cmd, capture_output=True, text=True)
+            
+            if syft_result.returncode == 0:
+                sbom_data = json.loads(syft_result.stdout)
+                
+                # Check for known vulnerable dependencies
+                grype_cmd = ["grype", image, "--output", "json"]
+                grype_result = subprocess.run(grype_cmd, capture_output=True, text=True)
+                
+                if grype_result.returncode == 0:
+                    vuln_data = json.loads(grype_result.stdout)
+                    
+                    # Process vulnerability findings
+                    for match in vuln_data.get("matches", []):
+                        vulnerability = match.get("vulnerability", {})
+                        severity = vulnerability.get("severity", "UNKNOWN").upper()
+                        
+                        # Map severity to our scale
+                        severity_map = {
+                            "CRITICAL": "CRITICAL",
+                            "HIGH": "HIGH",
+                            "MEDIUM": "MEDIUM",
+                            "LOW": "LOW",
+                            "NEGLIGIBLE": "INFO",
+                            "UNKNOWN": "INFO"
+                        }
+                        
+                        issues.append({
+                            "pod": pod_name,
+                            "container": container_name,
+                            "issue": (f"Vulnerable package found: {match.get('artifact', {}).get('name')} "
+                                    f"(version: {match.get('artifact', {}).get('version')}) - "
+                                    f"CVE: {vulnerability.get('id')}"),
+                            "severity": severity_map.get(severity, "INFO")
+                        })
+
+                # Check for outdated dependencies
+                for package in sbom_data.get("artifacts", []):
+                    if package.get("metadata", {}).get("outdated"):
+                        issues.append({
+                            "pod": pod_name,
+                            "container": container_name,
+                            "issue": f"Outdated package: {package.get('name')} (version: {package.get('version')})",
+                            "severity": "MEDIUM"
+                        })
+
+                # Check for deprecated packages
+                for package in sbom_data.get("artifacts", []):
+                    if package.get("metadata", {}).get("deprecated"):
+                        issues.append({
+                            "pod": pod_name,
+                            "container": container_name,
+                            "issue": f"Deprecated package: {package.get('name')} (version: {package.get('version')})",
+                            "severity": "HIGH"
+                        })
+
+        except Exception as e:
+            issues.append({
+                "pod": pod_name,
+                "container": container_name,
+                "issue": f"Error analyzing SBOM: {str(e)}",
+                "severity": "INFO"
+            })
+            
+        return issues
+
     def display_results(self, issues: List[Dict]):
         if not issues:
-            self.console.print("\n[green]No security issues found![/green]")
+            self.console.print("\n[bright_green]No security issues found![/bright_green]")
             return
 
-        table = Table(title="Kubernetes Security Issues")
-        table.add_column("Pod/Resource", style="cyan")
-        table.add_column("Container/Component", style="blue")
-        table.add_column("Issue", style="yellow")
-        table.add_column("Severity", style="red")
+        # Sort issues by severity
+        severity_order = {
+            "CRITICAL": 0,
+            "HIGH": 1,
+            "MEDIUM": 2,
+            "LOW": 3,
+            "INFO": 4
+        }
+        sorted_issues = sorted(
+            issues,
+            key=lambda x: severity_order.get(x["severity"], 999)
+        )
 
-        for issue in issues:
-            table.add_row(
+        # Separate SBOM issues from general security issues
+        sbom_issues = []
+        general_issues = []
+        
+        for issue in sorted_issues:
+            if any(sbom_keyword in issue["issue"].lower() 
+                  for sbom_keyword in ["vulnerable package", "outdated package", 
+                                     "deprecated package", "cve:", "dependency"]):
+                sbom_issues.append(issue)
+            else:
+                general_issues.append(issue)
+
+        # Display general security issues with suggestions
+        self.console.print("\n[bold bright_white]Security Analysis & Recommendations:[/]")
+        analysis_table = Table(title="Security Issues & Fixes")
+        analysis_table.add_column("Resource", style="bright_yellow")
+        analysis_table.add_column("Component", style="orange1")
+        analysis_table.add_column("Issue", style="bright_magenta")
+        analysis_table.add_column("Severity", style="bright_cyan")
+        analysis_table.add_column("Recommended Fix", style="bright_green")
+
+        # Add suggestions based on issue type
+        for issue in general_issues:
+            suggestion = self._get_suggestion(issue["issue"])
+            analysis_table.add_row(
                 issue["pod"],
                 issue["container"],
                 issue["issue"],
-                issue["severity"]
+                issue["severity"],
+                suggestion
             )
 
-        self.console.print(table)
+        self.console.print(analysis_table)
+
+        # Display SBOM Analysis with suggestions
+        if sbom_issues:
+            self.console.print("\n[bold bright_white]SBOM Analysis & Recommendations:[/]")
+            
+            sbom_table = Table(title="Dependencies & Vulnerabilities")
+            sbom_table.add_column("Resource", style="bright_yellow")
+            sbom_table.add_column("Component", style="orange1")
+            sbom_table.add_column("Issue", style="bright_magenta")
+            sbom_table.add_column("Severity", style="bright_cyan")
+            sbom_table.add_column("Recommended Fix", style="bright_green")
+
+            for issue in sbom_issues:
+                suggestion = self._get_sbom_suggestion(issue["issue"])
+                sbom_table.add_row(
+                    issue["pod"],
+                    issue["container"],
+                    issue["issue"],
+                    issue["severity"],
+                    suggestion
+                )
+
+            self.console.print(sbom_table)
+
+            # SBOM Statistics in table format
+            stats_table = Table(title="SBOM Analysis Summary")
+            stats_table.add_column("Metric", style="bright_yellow")
+            stats_table.add_column("Count", justify="right", style="bright_white")
+            stats_table.add_column("Risk Level", style="bright_red")
+            stats_table.add_column("Action Required", style="bright_green")
+            
+            # Calculate statistics
+            affected_containers = set()
+            issue_types = {"vulnerabilities": 0, "outdated": 0, "deprecated": 0}
+            vuln_counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
+            
+            for issue in sbom_issues:
+                vuln_counts[issue["severity"]] += 1
+                affected_containers.add(f"{issue['pod']}/{issue['container']}")
+                
+                if "vulnerable package" in issue["issue"].lower():
+                    issue_types["vulnerabilities"] += 1
+                elif "outdated package" in issue["issue"].lower():
+                    issue_types["outdated"] += 1
+                elif "deprecated package" in issue["issue"].lower():
+                    issue_types["deprecated"] += 1
+
+            # Add statistics rows with risk assessment
+            stats_table.add_row(
+                "Affected Containers",
+                str(len(affected_containers)),
+                "HIGH" if len(affected_containers) > 3 else "MEDIUM",
+                "Review and update affected containers"
+            )
+            stats_table.add_row(
+                "Critical Vulnerabilities",
+                str(vuln_counts["CRITICAL"]),
+                "CRITICAL",
+                "Immediate patching required"
+            )
+            stats_table.add_row(
+                "High Vulnerabilities",
+                str(vuln_counts["HIGH"]),
+                "HIGH",
+                "Schedule urgent updates"
+            )
+            stats_table.add_row(
+                "Outdated Packages",
+                str(issue_types["outdated"]),
+                "MEDIUM",
+                "Plan version upgrades"
+            )
+            stats_table.add_row(
+                "Deprecated Components",
+                str(issue_types["deprecated"]),
+                "HIGH",
+                "Replace deprecated components"
+            )
+            
+            self.console.print(stats_table)
+
+        # Overall Risk Assessment
+        risk_table = Table(title="Overall Risk Assessment")
+        risk_table.add_column("Category", style="bright_yellow")
+        risk_table.add_column("Risk Level", style="bright_red")
+        risk_table.add_column("Priority", style="bright_cyan")
+        risk_table.add_column("Recommended Actions", style="bright_green")
+
+        total_critical = sum(1 for i in issues if i["severity"] == "CRITICAL")
+        total_high = sum(1 for i in issues if i["severity"] == "HIGH")
+        
+        # Add risk assessment rows
+        if total_critical > 0:
+            risk_table.add_row(
+                "Critical Security Issues",
+                "CRITICAL",
+                "Immediate",
+                "Urgent remediation required - Critical vulnerabilities found"
+            )
+        if total_high > 0:
+            risk_table.add_row(
+                "High Security Issues",
+                "HIGH",
+                "Urgent",
+                "Schedule fixes within 1-2 weeks"
+            )
+        if issue_types.get("deprecated", 0) > 0:
+            risk_table.add_row(
+                "Deprecated Components",
+                "HIGH",
+                "High",
+                "Plan replacement of deprecated components"
+            )
+        if issue_types.get("outdated", 0) > 0:
+            risk_table.add_row(
+                "Outdated Dependencies",
+                "MEDIUM",
+                "Medium",
+                "Update dependencies in next sprint"
+            )
+
+        self.console.print("\n")
+        self.console.print(risk_table)
+
+    def _get_suggestion(self, issue: str) -> str:
+        """Get suggestion based on issue type."""
+        suggestions = {
+            "running as root": "Add 'runAsNonRoot: true' to container's securityContext",
+            "privileged mode": "Remove privileged mode or use more specific capabilities",
+            "resource limits": "Add CPU and memory limits to container spec",
+            "sensitive path mounted": "Remove sensitive mount or use more restrictive paths",
+            "docker.sock": "Avoid mounting docker socket, use more secure alternatives",
+            "nodeport": "Consider using ClusterIP or Ingress instead",
+            "network policies": "Implement NetworkPolicy resources to restrict traffic",
+            "rbac": "Review and restrict RBAC permissions to least privilege",
+            "overly permissive": "Define specific permissions instead of using wildcards"
+        }
+        
+        for key, suggestion in suggestions.items():
+            if key in issue.lower():
+                return suggestion
+        return "Review and apply security best practices"
+
+    def _get_sbom_suggestion(self, issue: str) -> str:
+        """Get suggestion for SBOM-related issues."""
+        if "vulnerable package" in issue.lower():
+            return "Update package to latest secure version"
+        elif "outdated package" in issue.lower():
+            return "Upgrade to latest stable version"
+        elif "deprecated package" in issue.lower():
+            return "Replace with supported alternative package"
+        elif "cve:" in issue.lower():
+            return "Apply security patch or update package"
+        return "Review and update dependencies"
 
 def main():
     checker = K8sSecurityChecker()
     
     with Progress() as progress:
-        task = progress.add_task("[cyan]Scanning Kubernetes cluster for security issues...", total=7)
+        task = progress.add_task("[cyan]Scanning Kubernetes cluster for security issues...", total=8)
         
         all_issues = []
         
@@ -265,6 +565,9 @@ def main():
         
         progress.update(task, advance=1, description="Checking sensitive keys...")
         all_issues.extend(checker.check_sensitive_keys())
+        
+        progress.update(task, advance=1, description="Analyzing Software Bill of Materials...")
+        all_issues.extend(checker.check_sbom())
         
         progress.update(task, advance=1, description="Generating report...")
     

@@ -26,6 +26,26 @@ if ! command -v kubectl &> /dev/null; then
     brew install kubectl
 fi
 
+# Install Syft if not present
+if ! command -v syft &> /dev/null; then
+    echo -e "${YELLOW}Installing Syft...${NC}"
+    brew tap anchore/syft
+    brew install syft
+fi
+
+# Install Grype if not present
+if ! command -v grype &> /dev/null; then
+    echo -e "${YELLOW}Installing Grype...${NC}"
+    brew tap anchore/grype
+    brew install grype
+fi
+
+# Install KubeLinter if not present
+if ! command -v kube-linter &> /dev/null; then
+    echo -e "${YELLOW}Installing KubeLinter...${NC}"
+    brew install kube-linter
+fi
+
 # Create kind cluster configuration
 cat << EOF > kind-config.yaml
 kind: Cluster

@@ -13,6 +13,8 @@ import yaml
 import requests
 from pathlib import Path
 import tempfile
+from rich import box
+import os
 
 class K8sSecurityChecker:
     def __init__(self):
@@ -24,19 +26,105 @@ class K8sSecurityChecker:
             self.rbac_v1 = client.RbacAuthorizationV1Api()
             self.console = Console()
             
-            # Check for SBOM tools
+            # Check for security tools
             self.has_syft = self._check_tool_installed("syft")
             self.has_grype = self._check_tool_installed("grype")
+            self.has_kube_linter = self._check_tool_installed("kube-linter")
         except Exception as e:
             print(f"Error initializing Kubernetes client: {e}")
             sys.exit(1)
 
     def _check_tool_installed(self, tool_name: str) -> bool:
-        """Check if a tool is installed."""
+        """Check if a tool is installed and try to install if missing."""
         try:
+            # First check if tool exists
             subprocess.run(["which", tool_name], capture_output=True, check=True)
             return True
         except subprocess.CalledProcessError:
+            print(f"\n[yellow]Warning: {tool_name} not found.[/yellow]")
+            
+            # Get current user
+            try:
+                current_user = subprocess.run(["whoami"], capture_output=True, text=True, check=True).stdout.strip()
+            except subprocess.CalledProcessError:
+                current_user = None
+
+            if sys.platform == "darwin":  # macOS
+                if current_user == "root":
+                    print(f"[red]Error: Cannot install {tool_name} as root user.[/red]")
+                    print("[yellow]Please run the script as a regular user. Homebrew should not be run as root.[/yellow]")
+                    print("\nTo fix this:")
+                    print("1. Exit the root session")
+                    print("2. Run the script as your regular user")
+                    print(f"3. Install {tool_name} manually with:")
+                    if tool_name == "kube-linter":
+                        print("   brew install kube-linter")
+                    else:
+                        print(f"   brew tap anchore/{tool_name}")
+                        print(f"   brew install {tool_name}")
+                else:
+                    try:
+                        if tool_name == "kube-linter":
+                            subprocess.run(["brew", "install", "kube-linter"], check=True)
+                        else:
+                            subprocess.run(["brew", "tap", f"anchore/{tool_name}"], check=True)
+                            subprocess.run(["brew", "install", tool_name], check=True)
+                        print(f"[green]{tool_name} successfully installed![/green]")
+                        return True
+                    except subprocess.CalledProcessError as e:
+                        print(f"[red]Error installing {tool_name}: {e}[/red]")
+                        print(f"\n[yellow]Please install {tool_name} manually:[/yellow]")
+                        if tool_name == "kube-linter":
+                            print("brew install kube-linter")
+                        else:
+                            print(f"brew tap anchore/{tool_name}")
+                            print(f"brew install {tool_name}")
+            else:  # Linux
+                try:
+                    if tool_name == "kube-linter":
+                        # For Linux, we'll install to user's local bin directory
+                        user_bin_dir = str(Path.home() / ".local" / "bin")
+                        Path(user_bin_dir).mkdir(parents=True, exist_ok=True)
+                        
+                        subprocess.run([
+                            "curl", "-L",
+                            "https://github.com/stackrox/kube-linter/releases/latest/download/kube-linter-linux.tar.gz",
+                            "-o", f"{user_bin_dir}/kube-linter.tar.gz"
+                        ], check=True)
+                        subprocess.run(["tar", "xzf", f"{user_bin_dir}/kube-linter.tar.gz", "-C", user_bin_dir], check=True)
+                        subprocess.run(["chmod", "+x", f"{user_bin_dir}/kube-linter"], check=True)
+                        # Clean up
+                        Path(f"{user_bin_dir}/kube-linter.tar.gz").unlink()
+                    else:
+                        # For Syft and Grype, install to user's local bin
+                        install_script = f"https://raw.githubusercontent.com/anchore/{tool_name}/main/install.sh"
+                        subprocess.run([
+                            "curl", "-sSfL", install_script,
+                            "-o", f"/tmp/{tool_name}-install.sh"
+                        ], check=True)
+                        subprocess.run([
+                            "sh", f"/tmp/{tool_name}-install.sh",
+                            "-b", str(Path.home() / ".local" / "bin")
+                        ], check=True)
+                        # Clean up
+                        Path(f"/tmp/{tool_name}-install.sh").unlink()
+                    
+                    print(f"[green]{tool_name} successfully installed![/green]")
+                    # Add the local bin to PATH if not already there
+                    local_bin = str(Path.home() / ".local" / "bin")
+                    if local_bin not in os.environ["PATH"]:
+                        os.environ["PATH"] = f"{local_bin}:{os.environ['PATH']}"
+                    return True
+                except subprocess.CalledProcessError as e:
+                    print(f"[red]Error installing {tool_name}: {e}[/red]")
+                    print(f"\n[yellow]Please install {tool_name} manually:[/yellow]")
+                    if tool_name == "kube-linter":
+                        print(f"mkdir -p ~/.local/bin")
+                        print(f"curl -L https://github.com/stackrox/kube-linter/releases/latest/download/kube-linter-linux.tar.gz | tar xzf - -C ~/.local/bin")
+                        print(f"chmod +x ~/.local/bin/kube-linter")
+                    else:
+                        print(f"curl -sSfL https://raw.githubusercontent.com/anchore/{tool_name}/main/install.sh | sh -s -- -b ~/.local/bin")
+            
             return False
 
     def check_pod_security(self, namespace: str = "default") -> List[Dict]:
@@ -235,13 +323,25 @@ class K8sSecurityChecker:
         """Check Software Bill of Materials (SBOM) for container images."""
         issues = []
         
-        if not self.has_syft or not self.has_grype:
+        # Check for required tools
+        missing_tools = []
+        if not self.has_syft:
+            missing_tools.append("syft")
+        if not self.has_grype:
+            missing_tools.append("grype")
+            
+        if missing_tools:
+            tool_names = " and ".join(missing_tools)
             issues.append({
                 "pod": "N/A",
                 "container": "System",
-                "issue": "SBOM tools (syft/grype) not installed - cannot perform deep dependency analysis",
+                "issue": (f"SBOM analysis skipped: Missing required tools ({tool_names}). "
+                         f"SBOM analysis provides important security insights but requires admin privileges to install tools. "
+                         f"Please have your system administrator install the required tools."),
                 "severity": "INFO"
             })
+            print(f"\n[yellow]Warning: Skipping SBOM analysis due to missing tools ({tool_names}).[/yellow]")
+            print("[yellow]Other security checks will still be performed.[/yellow]")
             return issues
 
         try:
@@ -266,6 +366,7 @@ class K8sSecurityChecker:
         
         try:
             # Generate SBOM using syft
+            print(f"\nAnalyzing dependencies for {image}...")
             syft_cmd = ["syft", image, "-o", "json"]
             syft_result = subprocess.run(syft_cmd, capture_output=True, text=True)
             
@@ -273,6 +374,7 @@ class K8sSecurityChecker:
                 sbom_data = json.loads(syft_result.stdout)
                 
                 # Check for known vulnerable dependencies
+                print(f"Scanning for vulnerabilities in {image}...")
                 grype_cmd = ["grype", image, "--output", "json"]
                 grype_result = subprocess.run(grype_cmd, capture_output=True, text=True)
                 
@@ -294,32 +396,40 @@ class K8sSecurityChecker:
                             "UNKNOWN": "INFO"
                         }
                         
+                        # Get fix version if available
+                        fix_version = vulnerability.get("fix", {}).get("versions", ["unknown"])[0]
+                        fix_info = f" (Fix available in version {fix_version})" if fix_version != "unknown" else ""
+                        
                         issues.append({
                             "pod": pod_name,
                             "container": container_name,
                             "issue": (f"Vulnerable package found: {match.get('artifact', {}).get('name')} "
                                     f"(version: {match.get('artifact', {}).get('version')}) - "
-                                    f"CVE: {vulnerability.get('id')}"),
+                                    f"CVE: {vulnerability.get('id')}{fix_info}"),
                             "severity": severity_map.get(severity, "INFO")
                         })
 
                 # Check for outdated dependencies
                 for package in sbom_data.get("artifacts", []):
                     if package.get("metadata", {}).get("outdated"):
+                        latest_version = package.get("metadata", {}).get("latest_version", "unknown")
+                        version_info = f" (Latest: {latest_version})" if latest_version != "unknown" else ""
                         issues.append({
                             "pod": pod_name,
                             "container": container_name,
-                            "issue": f"Outdated package: {package.get('name')} (version: {package.get('version')})",
+                            "issue": f"Outdated package: {package.get('name')} (current: {package.get('version')}){version_info}",
                             "severity": "MEDIUM"
                         })
 
                 # Check for deprecated packages
                 for package in sbom_data.get("artifacts", []):
                     if package.get("metadata", {}).get("deprecated"):
+                        alternative = package.get("metadata", {}).get("alternative", "")
+                        alt_info = f" (Alternative: {alternative})" if alternative else ""
                         issues.append({
                             "pod": pod_name,
                             "container": container_name,
-                            "issue": f"Deprecated package: {package.get('name')} (version: {package.get('version')})",
+                            "issue": f"Deprecated package: {package.get('name')} (version: {package.get('version')}){alt_info}",
                             "severity": "HIGH"
                         })
 
@@ -331,6 +441,83 @@ class K8sSecurityChecker:
                 "severity": "INFO"
             })
             
+        return issues
+
+    def check_kube_linter(self, namespace: str = "default") -> List[Dict]:
+        """Run KubeLinter checks on the namespace."""
+        issues = []
+
+        if not self.has_kube_linter:
+            issues.append({
+                "pod": "N/A",
+                "container": "System",
+                "issue": ("KubeLinter not installed. Install with:\n"
+                         "# For macOS:\nbrew install kube-linter\n"
+                         "# For Linux:\n"
+                         "curl -L https://github.com/stackrox/kube-linter/releases/latest/download/kube-linter-linux.tar.gz | tar xvzf - -C /usr/local/bin\n"
+                         "chmod +x /usr/local/bin/kube-linter"),
+                "severity": "HIGH"
+            })
+            return issues
+
+        try:
+            # Create a temporary file to store namespace resources
+            with tempfile.NamedTemporaryFile(suffix='.yaml') as temp_file:
+                # Export namespace resources to the temp file
+                export_cmd = f"kubectl get all -n {namespace} -o yaml > {temp_file.name}"
+                subprocess.run(export_cmd, shell=True, check=True)
+
+                # Run kube-linter with all checks enabled
+                print(f"\nRunning KubeLinter analysis on namespace {namespace}...")
+                linter_cmd = ["kube-linter", "lint", 
+                            "--format", "json",
+                            "--include-all",
+                            temp_file.name]
+                
+                result = subprocess.run(linter_cmd, capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    lint_data = json.loads(result.stdout)
+                    
+                    # Process KubeLinter findings
+                    for report in lint_data.get("Reports", []):
+                        # Map KubeLinter severity to our scale
+                        severity_map = {
+                            "error": "HIGH",
+                            "warning": "MEDIUM",
+                            "info": "LOW"
+                        }
+                        
+                        # Extract object details
+                        object_info = report.get("Object", {})
+                        object_name = object_info.get("Name", "N/A")
+                        object_kind = object_info.get("K8sObject", {}).get("Kind", "Resource")
+                        
+                        # Get remediation
+                        remediation = report.get("Remediation", "No specific remediation provided")
+                        
+                        issues.append({
+                            "pod": f"{object_kind}/{object_name}",
+                            "container": report.get("Check", "N/A"),
+                            "issue": f"{report.get('Description', 'No description')}\nRemediation: {remediation}",
+                            "severity": severity_map.get(report.get("Severity", "warning"), "MEDIUM")
+                        })
+                else:
+                    issues.append({
+                        "pod": "N/A",
+                        "container": "KubeLinter",
+                        "issue": f"Error running KubeLinter: {result.stderr}",
+                        "severity": "INFO"
+                    })
+
+        except Exception as e:
+            issues.append({
+                "pod": "N/A",
+                "container": "KubeLinter",
+                "issue": f"Error during KubeLinter analysis: {str(e)}",
+                "severity": "INFO"
+            })
+
         return issues
 
     def display_results(self, issues: List[Dict]):
@@ -351,6 +538,160 @@ class K8sSecurityChecker:
             key=lambda x: severity_order.get(x["severity"], 999)
         )
 
+        # Categorize issues
+        categories = {
+            "Container Security": [],
+            "RBAC & Access Control": [],
+            "Network Security": [],
+            "Resource Management": [],
+            "Dependencies & SBOM": [],
+            "Configuration": [],
+            "Best Practices": []
+        }
+
+        for issue in sorted_issues:
+            issue_text = issue["issue"].lower()
+            if any(keyword in issue_text for keyword in ["container", "privileged", "root", "dind", "docker"]):
+                categories["Container Security"].append(issue)
+            elif any(keyword in issue_text for keyword in ["rbac", "role", "permission", "access"]):
+                categories["RBAC & Access Control"].append(issue)
+            elif any(keyword in issue_text for keyword in ["network", "nodeport", "port", "expose"]):
+                categories["Network Security"].append(issue)
+            elif any(keyword in issue_text for keyword in ["limit", "quota", "resource", "memory", "cpu"]):
+                categories["Resource Management"].append(issue)
+            elif any(keyword in issue_text for keyword in ["package", "dependency", "cve", "vulnerability"]):
+                categories["Dependencies & SBOM"].append(issue)
+            elif any(keyword in issue_text for keyword in ["config", "setting", "parameter"]):
+                categories["Configuration"].append(issue)
+            else:
+                categories["Best Practices"].append(issue)
+
+        # Display Analysis Summary
+        self.console.print("\n[bold bright_white]Security Analysis Summary[/]")
+        
+        summary_table = Table(title="Security Analysis by Category")
+        summary_table.add_column("Category", style="bright_yellow")
+        summary_table.add_column("Critical", style="bright_red", justify="right")
+        summary_table.add_column("High", style="red", justify="right")
+        summary_table.add_column("Medium", style="bright_yellow", justify="right")
+        summary_table.add_column("Low", style="bright_green", justify="right")
+        summary_table.add_column("Info", style="bright_white", justify="right")
+        summary_table.add_column("Total", style="bright_white", justify="right")
+        summary_table.add_column("Risk Level", style="orange1")
+
+        for category, category_issues in categories.items():
+            if category_issues:
+                severity_counts = {
+                    "CRITICAL": 0,
+                    "HIGH": 0,
+                    "MEDIUM": 0,
+                    "LOW": 0,
+                    "INFO": 0
+                }
+                
+                for issue in category_issues:
+                    severity = issue.get("severity", "INFO")  # Default to INFO if severity is missing
+                    severity_counts[severity] += 1
+                
+                total = sum(severity_counts.values())
+                
+                # Calculate risk level (excluding INFO from risk calculation)
+                risk_score = (severity_counts["CRITICAL"] * 4 + 
+                            severity_counts["HIGH"] * 3 + 
+                            severity_counts["MEDIUM"] * 2 + 
+                            severity_counts["LOW"])
+                risk_level = "CRITICAL" if risk_score >= 8 else \
+                           "HIGH" if risk_score >= 5 else \
+                           "MEDIUM" if risk_score >= 3 else "LOW"
+                
+                summary_table.add_row(
+                    category,
+                    str(severity_counts["CRITICAL"]),
+                    str(severity_counts["HIGH"]),
+                    str(severity_counts["MEDIUM"]),
+                    str(severity_counts["LOW"]),
+                    str(severity_counts["INFO"]),
+                    str(total),
+                    risk_level
+                )
+
+        self.console.print(summary_table)
+
+        # Display Detailed Analysis
+        self.console.print("\n[bold bright_white]Detailed Analysis by Category[/]")
+        
+        for category, category_issues in categories.items():
+            if category_issues:
+                self.console.print(f"\n[bold bright_yellow]{category}[/]")
+                
+                category_table = Table(show_header=True, box=box.MINIMAL)
+                category_table.add_column("Resource", style="bright_white")
+                category_table.add_column("Component", style="orange1")
+                category_table.add_column("Issue", style="bright_magenta")
+                category_table.add_column("Severity", style="bright_cyan")
+                category_table.add_column("Recommended Fix", style="bright_green")
+
+                for issue in sorted(category_issues, key=lambda x: severity_order.get(x["severity"], 999)):
+                    suggestion = self._get_suggestion(issue["issue"])
+                    category_table.add_row(
+                        issue["pod"],
+                        issue["container"],
+                        issue["issue"],
+                        issue["severity"],
+                        suggestion
+                    )
+
+                self.console.print(category_table)
+
+        # Display Risk Assessment
+        self.console.print("\n[bold bright_white]Risk Assessment & Priorities[/]")
+        
+        risk_table = Table(title="Risk Assessment")
+        risk_table.add_column("Risk Level", style="bright_red")
+        risk_table.add_column("Category", style="bright_yellow")
+        risk_table.add_column("Impact", style="bright_magenta")
+        risk_table.add_column("Recommended Actions", style="bright_green")
+        risk_table.add_column("Timeline", style="orange1")
+
+        # Add critical risks
+        critical_categories = [cat for cat, issues in categories.items() 
+                             if any(i["severity"] == "CRITICAL" for i in issues)]
+        if critical_categories:
+            for category in critical_categories:
+                risk_table.add_row(
+                    "CRITICAL",
+                    category,
+                    "Immediate security threat",
+                    "Urgent remediation required",
+                    "24-48 hours"
+                )
+
+        # Add high risks
+        high_categories = [cat for cat, issues in categories.items() 
+                          if any(i["severity"] == "HIGH" for i in issues)]
+        if high_categories:
+            for category in high_categories:
+                risk_table.add_row(
+                    "HIGH",
+                    category,
+                    "Significant vulnerability",
+                    "Prioritize fixes",
+                    "1 week"
+                )
+
+        self.console.print(risk_table)
+
+        # Display original detailed tables
+        self.console.print("\n[bold bright_white]Detailed Findings[/]")
+        
+        # Display general security issues with suggestions
+        analysis_table = Table(title="Security Issues & Fixes")
+        analysis_table.add_column("Resource", style="bright_yellow")
+        analysis_table.add_column("Component", style="orange1")
+        analysis_table.add_column("Issue", style="bright_magenta")
+        analysis_table.add_column("Severity", style="bright_cyan")
+        analysis_table.add_column("Recommended Fix", style="bright_green")
+
         # Separate SBOM issues from general security issues
         sbom_issues = []
         general_issues = []
@@ -362,15 +703,6 @@ class K8sSecurityChecker:
                 sbom_issues.append(issue)
             else:
                 general_issues.append(issue)
-
-        # Display general security issues with suggestions
-        self.console.print("\n[bold bright_white]Security Analysis & Recommendations:[/]")
-        analysis_table = Table(title="Security Issues & Fixes")
-        analysis_table.add_column("Resource", style="bright_yellow")
-        analysis_table.add_column("Component", style="orange1")
-        analysis_table.add_column("Issue", style="bright_magenta")
-        analysis_table.add_column("Severity", style="bright_cyan")
-        analysis_table.add_column("Recommended Fix", style="bright_green")
 
         # Add suggestions based on issue type
         for issue in general_issues:
@@ -387,7 +719,7 @@ class K8sSecurityChecker:
 
         # Display SBOM Analysis with suggestions
         if sbom_issues:
-            self.console.print("\n[bold bright_white]SBOM Analysis & Recommendations:[/]")
+            self.console.print("\n[bold bright_white]SBOM Analysis & Recommendations[/]")
             
             sbom_table = Table(title="Dependencies & Vulnerabilities")
             sbom_table.add_column("Resource", style="bright_yellow")
@@ -407,106 +739,6 @@ class K8sSecurityChecker:
                 )
 
             self.console.print(sbom_table)
-
-            # SBOM Statistics in table format
-            stats_table = Table(title="SBOM Analysis Summary")
-            stats_table.add_column("Metric", style="bright_yellow")
-            stats_table.add_column("Count", justify="right", style="bright_white")
-            stats_table.add_column("Risk Level", style="bright_red")
-            stats_table.add_column("Action Required", style="bright_green")
-            
-            # Calculate statistics
-            affected_containers = set()
-            issue_types = {"vulnerabilities": 0, "outdated": 0, "deprecated": 0}
-            vuln_counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
-            
-            for issue in sbom_issues:
-                vuln_counts[issue["severity"]] += 1
-                affected_containers.add(f"{issue['pod']}/{issue['container']}")
-                
-                if "vulnerable package" in issue["issue"].lower():
-                    issue_types["vulnerabilities"] += 1
-                elif "outdated package" in issue["issue"].lower():
-                    issue_types["outdated"] += 1
-                elif "deprecated package" in issue["issue"].lower():
-                    issue_types["deprecated"] += 1
-
-            # Add statistics rows with risk assessment
-            stats_table.add_row(
-                "Affected Containers",
-                str(len(affected_containers)),
-                "HIGH" if len(affected_containers) > 3 else "MEDIUM",
-                "Review and update affected containers"
-            )
-            stats_table.add_row(
-                "Critical Vulnerabilities",
-                str(vuln_counts["CRITICAL"]),
-                "CRITICAL",
-                "Immediate patching required"
-            )
-            stats_table.add_row(
-                "High Vulnerabilities",
-                str(vuln_counts["HIGH"]),
-                "HIGH",
-                "Schedule urgent updates"
-            )
-            stats_table.add_row(
-                "Outdated Packages",
-                str(issue_types["outdated"]),
-                "MEDIUM",
-                "Plan version upgrades"
-            )
-            stats_table.add_row(
-                "Deprecated Components",
-                str(issue_types["deprecated"]),
-                "HIGH",
-                "Replace deprecated components"
-            )
-            
-            self.console.print(stats_table)
-
-        # Overall Risk Assessment
-        risk_table = Table(title="Overall Risk Assessment")
-        risk_table.add_column("Category", style="bright_yellow")
-        risk_table.add_column("Risk Level", style="bright_red")
-        risk_table.add_column("Priority", style="bright_cyan")
-        risk_table.add_column("Recommended Actions", style="bright_green")
-
-        total_critical = sum(1 for i in issues if i["severity"] == "CRITICAL")
-        total_high = sum(1 for i in issues if i["severity"] == "HIGH")
-        
-        # Add risk assessment rows
-        if total_critical > 0:
-            risk_table.add_row(
-                "Critical Security Issues",
-                "CRITICAL",
-                "Immediate",
-                "Urgent remediation required - Critical vulnerabilities found"
-            )
-        if total_high > 0:
-            risk_table.add_row(
-                "High Security Issues",
-                "HIGH",
-                "Urgent",
-                "Schedule fixes within 1-2 weeks"
-            )
-        if issue_types.get("deprecated", 0) > 0:
-            risk_table.add_row(
-                "Deprecated Components",
-                "HIGH",
-                "High",
-                "Plan replacement of deprecated components"
-            )
-        if issue_types.get("outdated", 0) > 0:
-            risk_table.add_row(
-                "Outdated Dependencies",
-                "MEDIUM",
-                "Medium",
-                "Update dependencies in next sprint"
-            )
-
-        self.console.print("\n")
-        self.console.print(risk_table)
 
     def _get_suggestion(self, issue: str) -> str:
         """Get suggestion based on issue type."""
@@ -543,13 +775,16 @@ def main():
     checker = K8sSecurityChecker()
     
     with Progress() as progress:
-        task = progress.add_task("[cyan]Scanning Kubernetes cluster for security issues...", total=8)
+        task = progress.add_task("[cyan]Scanning Kubernetes cluster for security issues...", total=9)  # Updated total
         
         all_issues = []
         
         # Run all security checks
         progress.update(task, advance=1, description="Checking pod security...")
         all_issues.extend(checker.check_pod_security())
+        
+        progress.update(task, advance=1, description="Running KubeLinter checks...")
+        all_issues.extend(checker.check_kube_linter())
         
         progress.update(task, advance=1, description="Checking NodePort exposure...")
         all_issues.extend(checker.check_nodeport_exposure())

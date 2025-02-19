@@ -8,6 +8,8 @@ from rich.table import Table
 from rich.progress import Progress
 
 from .checks.pod_security import PodSecurityChecker
+from .checks.cis_benchmark import CISBenchmarkChecker
+from .checks.admission_controller import AdmissionControllerChecker
 # Import other checkers as they are created
 
 class SecurityScanner:
@@ -17,6 +19,8 @@ class SecurityScanner:
         self.console = Console()
         self.checkers = [
             PodSecurityChecker(),
+            CISBenchmarkChecker(),
+            AdmissionControllerChecker(),
             # Add other checkers as they are created
         ]
 

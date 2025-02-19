@@ -15,6 +15,37 @@ The script checks for:
 - Crypto mining container detection
 - Container escape risks
 
+### Admission Controller Security
+- Verification of enabled admission controllers
+- Detection of missing critical controllers
+- Identification of deprecated controllers
+- Webhook configuration analysis:
+  - TLS configuration validation
+  - Security policy checks
+  - Timeout settings review
+  - Failure policy assessment
+- Required controller checks:
+  - PodSecurityPolicy
+  - NodeRestriction
+  - ValidatingAdmissionWebhook
+  - MutatingAdmissionWebhook
+  - AlwaysPullImages
+  - ImagePolicyWebhook
+
+### CIS Benchmark Analysis
+- Comprehensive CIS Kubernetes Benchmark checks
+- Severity-based categorization of findings
+- Detailed remediation steps for each failed check
+- Coverage of control plane and worker node security
+- Audit steps for verification
+- Sections include:
+  - Control Plane Components
+  - etcd
+  - Control Plane Configuration
+  - Worker Nodes
+  - Policies
+  - Managed Services
+
 ### Access and Authentication
 - RBAC misconfigurations and least privilege violations
 - Sensitive keys in secrets

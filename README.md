@@ -14,6 +14,28 @@ The script checks for:
 - Docker-in-Docker (DinD) detection
 - Crypto mining container detection
 - Container escape risks
+- Kubesec analysis:
+  - Security context validation
+  - Privilege escalation checks
+  - Root user prevention
+  - Read-only root filesystem
+  - Resource limits enforcement
+  - Security capabilities
+- Trivy vulnerability scanning:
+  - CVE detection and analysis
+  - Package vulnerability assessment
+  - Version-specific fixes
+  - Severity-based categorization
+  - Detailed vulnerability descriptions
+  - Reference documentation
+- gVisor security:
+  - Runtime availability checks
+  - Node configuration validation
+  - RuntimeClass configuration
+  - Workload isolation assessment
+  - Security-sensitive workload detection
+  - Privileged container isolation
+  - Containerd integration verification
 
 ### Admission Controller Security
 - Verification of enabled admission controllers
@@ -86,6 +108,9 @@ The script checks for:
 - `kubectl` configured with proper cluster access
 - `kube-bench` installed (optional, for CIS benchmark scanning)
 - `syft` and `grype` installed (for SBOM analysis)
+- `kubesec` installed (for Kubernetes security analysis)
+- `trivy` installed (for container vulnerability scanning)
+- `gvisor` installed (optional, for enhanced container isolation)
 
 ## Installation
 
@@ -145,6 +170,62 @@ On Linux:
 ```bash
 curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
 curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+```
+
+### Installing Security Scanning Tools
+
+For Kubesec:
+
+On macOS:
+```bash
+brew install kubesec
+```
+
+On Linux:
+```bash
+curl -L https://github.com/controlplaneio/kubesec/releases/latest/download/kubesec-linux-amd64 -o kubesec && \
+chmod +x kubesec && \
+sudo mv kubesec /usr/local/bin/
+```
+
+For Trivy:
+
+On macOS:
+```bash
+brew install trivy
+```
+
+On Linux:
+```bash
+curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+```
+
+### Installing gVisor
+
+For macOS with Docker Desktop:
+1. Open Docker Desktop preferences
+2. Go to the "Features in development" section
+3. Enable gVisor runtime
+
+For Linux:
+```bash
+# Install gVisor
+curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" | sudo tee /etc/apt/sources.list.d/gvisor.list
+sudo apt-get update && sudo apt-get install -y runsc
+
+# Configure containerd
+sudo mkdir -p /etc/containerd
+cat << EOF | sudo tee /etc/containerd/config.toml
+version = 2
+[plugins."io.containerd.runtime.v1.linux"]
+  shim_debug = true
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
+EOF
+
+# Restart containerd
+sudo systemctl restart containerd
 ```
 
 ## Setting Up a Test Environment

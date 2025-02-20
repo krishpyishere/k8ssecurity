@@ -10,6 +10,8 @@ from rich.progress import Progress
 from .checks.pod_security import PodSecurityChecker
 from .checks.cis_benchmark import CISBenchmarkChecker
 from .checks.admission_controller import AdmissionControllerChecker
+from .checks.container_scan import ContainerSecurityScanner
+from .checks.gvisor_check import GVisorChecker
 # Import other checkers as they are created
 
 class SecurityScanner:
@@ -21,6 +23,8 @@ class SecurityScanner:
             PodSecurityChecker(),
             CISBenchmarkChecker(),
             AdmissionControllerChecker(),
+            ContainerSecurityScanner(),
+            GVisorChecker(),
             # Add other checkers as they are created
         ]
 

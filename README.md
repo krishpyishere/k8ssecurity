@@ -1,300 +1,284 @@
 # Kubernetes Security Scanner
 
-A comprehensive security scanning tool for Kubernetes clusters that identifies security issues, misconfigurations, and potential vulnerabilities.
+A comprehensive security scanning tool for Kubernetes clusters that identifies security issues, misconfigurations, and potential vulnerabilities, aligned with the CKS (Certified Kubernetes Security Specialist) curriculum.
 
 ## Features
 
-The script checks for:
+The scanner performs security checks across five major domains, each with specialized checkers:
 
-### Container Security
-- Containers running as root
-- Containers running in privileged mode
-- Missing resource limits
-- Sensitive path mounts
-- Docker-in-Docker (DinD) detection
-- Crypto mining container detection
-- Container escape risks
-- Kubesec analysis:
-  - Security context validation
-  - Privilege escalation checks
-  - Root user prevention
-  - Read-only root filesystem
-  - Resource limits enforcement
-  - Security capabilities
-- Trivy vulnerability scanning:
-  - CVE detection and analysis
-  - Package vulnerability assessment
-  - Version-specific fixes
-  - Severity-based categorization
-  - Detailed vulnerability descriptions
-  - Reference documentation
-- gVisor security:
-  - Runtime availability checks
-  - Node configuration validation
-  - RuntimeClass configuration
-  - Workload isolation assessment
-  - Security-sensitive workload detection
-  - Privileged container isolation
-  - Containerd integration verification
+### 1. Cluster Setup and Hardening
 
-### Admission Controller Security
-- Verification of enabled admission controllers
-- Detection of missing critical controllers
-- Identification of deprecated controllers
-- Webhook configuration analysis:
-  - TLS configuration validation
-  - Security policy checks
-  - Timeout settings review
-  - Failure policy assessment
-- Required controller checks:
-  - PodSecurityPolicy
-  - NodeRestriction
-  - ValidatingAdmissionWebhook
-  - MutatingAdmissionWebhook
-  - AlwaysPullImages
-  - ImagePolicyWebhook
+#### CIS Benchmark Checker (`CISBenchmarkChecker`)
+- Validates compliance with CIS Kubernetes Benchmark standards
+- Checks control plane configurations
+- Validates worker node settings
+- Verifies platform-specific security settings
+- Provides remediation steps for non-compliant items
 
-### CIS Benchmark Analysis
-- Comprehensive CIS Kubernetes Benchmark checks
-- Severity-based categorization of findings
-- Detailed remediation steps for each failed check
-- Coverage of control plane and worker node security
-- Audit steps for verification
-- Sections include:
-  - Control Plane Components
-  - etcd
-  - Control Plane Configuration
-  - Worker Nodes
-  - Policies
-  - Managed Services
+#### Admission Controller Checker (`AdmissionControllerChecker`)
+- Validates admission controller configurations
+- Checks PodSecurityPolicy setup
+- Verifies ValidatingWebhookConfiguration
+- Audits MutatingWebhookConfiguration
+- Ensures critical admission controllers are enabled
 
-### Access and Authentication
-- RBAC misconfigurations and least privilege violations
-- Sensitive keys in secrets
-- Overly permissive roles
+#### RBAC Checker (`RBACChecker`)
+- Audits role-based access control configurations
+- Identifies overly permissive roles
+- Checks service account configurations
+- Validates role bindings
+- Detects dangerous permissions
 
-### Network Security
-- NodePort exposed services
-- Network Policy configurations
-- SSRF vulnerabilities
-- Network boundary security
+#### Network Policy Checker (`NetworkPolicyChecker`)
+- Validates network segmentation
+- Checks ingress/egress rules
+- Identifies unprotected namespaces
+- Verifies pod isolation
+- Detects overly permissive network policies
 
-### Compliance and Best Practices
-- Kubernetes CIS benchmarks analysis
-- Docker CIS benchmarks analysis
-- Resource limits and DoS prevention
-- Namespace security
+### 2. System Hardening
 
-### Additional Security Checks
-- Private registry security
-- Helm security (including deprecated v2 tiller)
-- Runtime security monitoring
-- Hidden layer analysis
-- Environment information gathering
+#### Node Security Checker (`NodeSecurityChecker`)
+- Validates node configurations
+- Checks kernel parameters
+- Verifies kubelet security settings
+- Audits node labels and taints
+- Monitors node conditions
 
-### Software Bill of Materials (SBOM)
-- Container image dependency analysis
-- Vulnerability scanning using Grype
-- Detection of outdated packages
-- Identification of deprecated components
-- CVE tracking and reporting
-- Package version analysis
+#### Runtime Security Checker (`RuntimeSecurityChecker`)
+- Validates container runtime configurations
+- Checks containerd/Docker security settings
+- Verifies seccomp profiles
+- Validates AppArmor configurations
+- Monitors runtime privileges
+
+#### gVisor Checker (`GVisorChecker`)
+- Verifies gVisor installation and configuration
+- Checks runtime class definitions
+- Validates pod runtime settings
+- Monitors gVisor resource usage
+- Ensures proper isolation
+
+### 3. Minimize Microservice Vulnerabilities
+
+#### Container Security Checker (`ContainerSecurityChecker`)
+- Validates container security contexts
+- Checks resource limits and requests
+- Verifies image configurations
+- Monitors privileged containers
+- Detects dangerous capabilities
+
+#### Pod Security Checker (`PodSecurityChecker`)
+- Validates pod security contexts
+- Checks host namespace usage
+- Verifies volume mounts
+- Monitors pod privileges
+- Detects security risks
+
+#### Secrets Checker (`SecretsChecker`)
+- Audits secrets management
+- Checks secret mounting methods
+- Verifies secret encryption
+- Monitors secret usage
+- Detects exposed sensitive data
+
+### 4. Supply Chain Security
+
+#### Image Security Checker (`ImageSecurityChecker`)
+- Validates image sources
+- Checks image signatures
+- Verifies image scanning results
+- Monitors base images
+- Detects vulnerable components
+
+#### SBOM Checker (`SBOMChecker`)
+- Analyzes software bill of materials
+- Checks dependency versions
+- Verifies package sources
+- Monitors outdated components
+- Detects vulnerable dependencies
+
+### 5. Monitoring, Logging and Runtime Security
+
+#### Audit Checker (`AuditChecker`)
+- Validates audit logging configuration
+- Checks audit policy rules
+- Verifies log storage
+- Monitors audit backends
+- Ensures proper audit coverage
+
+#### Falco Checker (`FalcoChecker`)
+- Verifies Falco installation
+- Checks rule configurations
+- Validates alert settings
+- Monitors Falco status
+- Ensures runtime protection
 
 ## Prerequisites
 
 - Python 3.7+
-- Docker Desktop for Mac
 - Access to a Kubernetes cluster
 - `kubectl` configured with proper cluster access
-- `kube-bench` installed (optional, for CIS benchmark scanning)
-- `syft` and `grype` installed (for SBOM analysis)
-- `kubesec` installed (for Kubernetes security analysis)
-- `trivy` installed (for container vulnerability scanning)
-- `gvisor` installed (optional, for enhanced container isolation)
 
-## Installation
+### Required Tools
 
-### From Source
+The scanner integrates with several security tools. Here's how to install them:
 
-1. Clone the repository:
+#### For macOS:
 ```bash
-git clone https://github.com/yourusername/k8s-security-checker.git
-cd k8s-security-checker
-```
+# Install core tools
+brew install kind kubectl
 
-2. Create a virtual environment (recommended):
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. Install the package in development mode:
-```bash
-pip install -e .
-```
-
-### Using pip (when published)
-
-```bash
-pip install k8s-security-checker
-```
-
-### Installing Optional Dependencies
-
-For CIS benchmark scanning:
-
-On macOS:
-```bash
-brew install kube-bench
-```
-
-On Linux:
-```bash
-curl -L https://github.com/aquasecurity/kube-bench/releases/download/v0.6.2/kube-bench_0.6.2_linux_amd64.deb -o kube-bench.deb
-sudo dpkg -i kube-bench.deb
-```
-
-### Installing SBOM Tools
-
-For SBOM analysis, install Syft and Grype:
-
-On macOS:
-```bash
+# Install SBOM tools
 brew tap anchore/syft
 brew install syft
 brew tap anchore/grype
 brew install grype
+
+# Install security scanners
+brew install kube-bench
+brew install kubesec
+brew install trivy
+
+# Install Falco (optional)
+brew tap falcosecurity/tap
+brew install falco
 ```
 
-On Linux:
+#### For Linux:
 ```bash
+# Install SBOM tools
 curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
 curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
-```
 
-### Installing Security Scanning Tools
+# Install security scanners
+curl -L https://github.com/aquasecurity/kube-bench/releases/download/v0.6.2/kube-bench_0.6.2_linux_amd64.deb -o kube-bench.deb
+sudo dpkg -i kube-bench.deb
 
-For Kubesec:
-
-On macOS:
-```bash
-brew install kubesec
-```
-
-On Linux:
-```bash
-curl -L https://github.com/controlplaneio/kubesec/releases/latest/download/kubesec-linux-amd64 -o kubesec && \
-chmod +x kubesec && \
-sudo mv kubesec /usr/local/bin/
-```
-
-For Trivy:
-
-On macOS:
-```bash
-brew install trivy
-```
-
-On Linux:
-```bash
 curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+# Install Falco (optional)
+curl -fsSL https://falco.org/repo/falcosecurity-3672BA8F.asc | sudo apt-key add -
+echo "deb https://download.falco.org/packages/deb stable main" | sudo tee -a /etc/apt/sources.list.d/falcosecurity.list
+sudo apt-get update
+sudo apt-get install -y falco
 ```
 
-### Installing gVisor
+### Installing the Scanner
 
-For macOS with Docker Desktop:
-1. Open Docker Desktop preferences
-2. Go to the "Features in development" section
-3. Enable gVisor runtime
-
-For Linux:
 ```bash
-# Install gVisor
-curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" | sudo tee /etc/apt/sources.list.d/gvisor.list
-sudo apt-get update && sudo apt-get install -y runsc
+# From PyPI
+pip install k8s-security-checker
 
-# Configure containerd
-sudo mkdir -p /etc/containerd
-cat << EOF | sudo tee /etc/containerd/config.toml
-version = 2
-[plugins."io.containerd.runtime.v1.linux"]
-  shim_debug = true
-[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
-  runtime_type = "io.containerd.runsc.v1"
-EOF
-
-# Restart containerd
-sudo systemctl restart containerd
-```
-
-## Setting Up a Test Environment
-
-The repository includes a script to set up a local Kubernetes cluster for testing. This creates a multi-node cluster using `kind` (Kubernetes in Docker) and deploys various resources with security issues for testing.
-
-### Prerequisites for Test Environment
-
-- Docker Desktop for Mac (must be running)
-- Internet connection (to pull container images)
-
-### Setting Up the Test Cluster
-
-1. Make sure Docker Desktop is running
-
-2. Run the setup script:
-```bash
-./setup_test_cluster.sh
-```
-
-The script will:
-- Install necessary tools (kind, kubectl) if not present
-- Create a 3-node Kubernetes cluster (1 control plane + 2 workers)
-- Create a test namespace with various security issues:
-  - Privileged containers
-  - Root containers
-  - Containers without resource limits
-  - NodePort services
-  - Overly permissive RBAC roles
-  - Sensitive mount paths
-  - Docker-in-Docker containers
-
-### Testing the Security Checker
-
-After the test cluster is ready, run the security checker:
-```bash
-k8s-security-check -n test-security
-```
-
-This will scan the test namespace and should find multiple security issues.
-
-### Cleaning Up
-
-To delete the test cluster:
-```bash
-kind delete cluster --name security-test
+# From source
+git clone https://github.com/yourusername/k8s-security-checker.git
+cd k8s-security-checker
+pip install -e .
 ```
 
 ## Usage
 
 ### Basic Usage
 
-Run the security checker on the default namespace:
 ```bash
+# Scan default namespace
 k8s-security-check
+
+# Scan specific namespace
+k8s-security-check -n your-namespace
+
+# Scan with increased verbosity
+k8s-security-check -v
+
+# Export results to JSON
+k8s-security-check --output json > results.json
 ```
 
-Scan a specific namespace:
+### Configuration
+
+The scanner can be configured using environment variables or a configuration file:
+
+```yaml
+# config.yaml
+checkers:
+  cis_benchmark:
+    enabled: true
+    skip_tests: ["1.2.3", "1.3.4"]
+  
+  network_policy:
+    enabled: true
+    ignore_namespaces: ["kube-system"]
+  
+  image_security:
+    enabled: true
+    allowed_registries:
+      - "registry.company.com"
+      - "gcr.io/company-project"
+
+  runtime_security:
+    enabled: true
+    required_seccomp_profiles:
+      - "runtime/default"
+      - "localhost/custom-profile"
+    required_apparmor_profiles:
+      - "runtime/default"
+      - "localhost/custom-profile"
+
+  pod_security:
+    enabled: true
+    forbidden_capabilities:
+      - "SYS_ADMIN"
+      - "NET_ADMIN"
+    required_drop_capabilities:
+      - "ALL"
+
+  secrets:
+    enabled: true
+    forbidden_mount_paths:
+      - "/etc"
+      - "/root"
+    required_annotations:
+      - "vault.hashicorp.com/agent-inject"
+
+  audit:
+    enabled: true
+    min_log_size: "10Gi"
+    required_audit_levels:
+      - "Metadata"
+      - "Request"
+      - "RequestResponse"
+
+  falco:
+    enabled: true
+    required_rules:
+      - "Terminal shell in container"
+      - "File open by system procs"
+```
+
+### Environment Variables
+
 ```bash
-k8s-security-check -n your-namespace
+# Enable/disable specific checkers
+export K8S_SECURITY_CHECKER_DISABLE="cis_benchmark,network_policy"
+
+# Configure severity thresholds
+export K8S_SECURITY_CHECKER_MIN_SEVERITY="HIGH"
+
+# Set output format
+export K8S_SECURITY_CHECKER_OUTPUT="json"
+
+# Configure tool paths
+export K8S_SECURITY_CHECKER_KUBE_BENCH_PATH="/usr/local/bin/kube-bench"
+export K8S_SECURITY_CHECKER_TRIVY_PATH="/usr/local/bin/trivy"
 ```
 
 ### Exit Codes
 
-The tool uses the following exit codes:
 - 0: No issues found
-- 1: HIGH severity issues found
-- 2: CRITICAL severity issues found
-- Other non-zero: Error running the checks
+- 1: Low/Medium severity issues found
+- 2: High severity issues found
+- 3: Critical severity issues found
+- Other: Error running checks
 
 ## Development
 
@@ -302,87 +286,189 @@ The tool uses the following exit codes:
 
 ```
 k8s_security_checker/
-├── __init__.py           # Package initialization
-├── base_checker.py       # Base class for all checkers
-├── main.py              # Main script and CLI
-├── checks/              # Individual security checkers
-│   ├── __init__.py
-│   └── pod_security.py  # Pod security checks
-└── tests/               # Test suite
-    ├── __init__.py
-    └── test_pod_security.py
+├── __init__.py
+├── base_checker.py
+├── main.py
+├── checks/
+│   ├── cluster_hardening/
+│   │   ├── cis_benchmark.py
+│   │   ├── admission_controller.py
+│   │   ├── rbac.py
+│   │   └── network_policy.py
+│   ├── system_hardening/
+│   │   ├── node_security.py
+│   │   ├── runtime_security.py
+│   │   └── gvisor.py
+│   ├── microservice/
+│   │   ├── container_security.py
+│   │   ├── pod_security.py
+│   │   └── secrets.py
+│   ├── supply_chain/
+│   │   ├── image_security.py
+│   │   └── sbom.py
+│   └── monitoring/
+│       ├── audit.py
+│       └── falco.py
+└── tests/
+    └── checks/
+        ├── test_cis_benchmark.py
+        ├── test_network_policy.py
+        └── ...
 ```
 
 ### Adding New Checkers
 
-1. Create a new file in `k8s_security_checker/checks/` (e.g., `network_policy.py`)
-2. Create a checker class that inherits from `BaseChecker`
+1. Create a new checker class in the appropriate domain directory
+2. Inherit from `BaseChecker`
 3. Implement the `run()` method
-4. Create corresponding test file in `tests/`
-5. Add the checker to the list in `main.py`
+4. Add tests in the `tests/` directory
+5. Register the checker in `main.py`
 
 Example:
 ```python
-from ..base_checker import BaseChecker
+from typing import List, Dict
+from ...base_checker import BaseChecker
 
 class MyNewChecker(BaseChecker):
-    def run(self, namespace: str = "default"):
+    """My new security checker."""
+    
+    def run(self, namespace: str = "default") -> List[Dict]:
         issues = []
-        # Implement your checks here
+        # Implement security checks
         return issues
 ```
 
 ### Running Tests
 
-Run the entire test suite:
 ```bash
-python -m unittest discover k8s_security_checker/tests
-```
+# Run all tests
+python -m pytest
 
-Run a specific test file:
-```bash
-python -m unittest k8s_security_checker/tests/test_pod_security.py
+# Run specific test file
+python -m pytest tests/checks/test_network_policy.py
+
+# Run with coverage
+python -m pytest --cov=k8s_security_checker
 ```
 
 ### Code Style
 
-The project follows PEP 8 guidelines. Before committing, ensure your code is properly formatted:
+The project follows PEP 8 guidelines. Before committing:
+
 ```bash
-# Install development dependencies
+# Install development tools
 pip install black isort pylint
 
 # Format code
 black k8s_security_checker
 isort k8s_security_checker
 
-# Run linter
+# Check style
 pylint k8s_security_checker
 ```
 
-## Integration with Other Tools
+## Integration Examples
 
-The script can integrate with:
-- Falco for runtime security monitoring
-- Popeye for cluster sanitization
-- Cilium Tetragon for eBPF-based security
-- Kyverno for policy enforcement
+### CI/CD Pipeline (GitHub Actions)
 
-## Contributing
+```yaml
+name: Security Scan
+on: [push, pull_request]
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests for your changes
-5. Run the test suite
-6. Submit a pull request
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+          
+      - name: Install k8s-security-checker
+        run: pip install k8s-security-checker
+        
+      - name: Run security scan
+        run: k8s-security-check --output json > scan-results.json
+        
+      - name: Upload results
+        uses: actions/upload-artifact@v2
+        with:
+          name: security-scan-results
+          path: scan-results.json
+```
+
+### ArgoCD Pre-Sync Hook
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: security-scan
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+spec:
+  template:
+    spec:
+      containers:
+      - name: security-scanner
+        image: k8s-security-checker
+        command: ["k8s-security-check"]
+        args: ["-n", "$(NAMESPACE)"]
+      restartPolicy: Never
+```
+
+### Prometheus Integration
+
+The scanner can expose metrics for Prometheus:
+
+```yaml
+# prometheus-config.yaml
+scrape_configs:
+  - job_name: 'k8s-security-checker'
+    static_configs:
+      - targets: ['localhost:9090']
+```
+
+Metrics exposed:
+- `k8s_security_issues_total{severity="CRITICAL|HIGH|MEDIUM|LOW"}`
+- `k8s_security_check_duration_seconds{checker="checker_name"}`
+- `k8s_security_check_errors_total{checker="checker_name"}`
 
 ## Security Notes
 
-- Make sure you have the proper permissions to access the Kubernetes cluster
-- Some checks require additional tools to be installed (like kube-bench)
-- Be cautious when running security scans in production environments
-- Keep the tool and its dependencies updated
-- Review the findings and false positives in your environment
+- The scanner requires read access to cluster resources
+- Some checks may require elevated privileges
+- Review findings before applying automated fixes
+- Keep the scanner and its dependencies updated
+- Monitor scanner resource usage in production
+
+## Troubleshooting
+
+Common issues and solutions:
+
+1. **Permission Errors**
+   ```bash
+   # Create necessary RBAC roles
+   kubectl apply -f k8s_security_checker/deploy/rbac.yaml
+   ```
+
+2. **Tool Not Found**
+   ```bash
+   # Check tool installation
+   which kube-bench syft grype trivy
+   
+   # Verify PATH
+   echo $PATH
+   ```
+
+3. **High Resource Usage**
+   ```bash
+   # Configure resource limits
+   export K8S_SECURITY_CHECKER_MAX_WORKERS=4
+   export K8S_SECURITY_CHECKER_TIMEOUT=300
+   ```
 
 ## License
 
@@ -392,4 +478,5 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 - Kubernetes Security Best Practices
 - CIS Kubernetes Benchmark
-- OWASP Kubernetes Security Cheat Sheet 
+- OWASP Kubernetes Security Cheat Sheet
+- CKS Curriculum and Guidelines 

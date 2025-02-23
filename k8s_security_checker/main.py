@@ -7,12 +7,29 @@ from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress
 
-from .checks.pod_security import PodSecurityChecker
-from .checks.cis_benchmark import CISBenchmarkChecker
-from .checks.admission_controller import AdmissionControllerChecker
-from .checks.container_scan import ContainerSecurityScanner
-from .checks.gvisor_check import GVisorChecker
-# Import other checkers as they are created
+# Cluster Setup and Hardening
+from .checks.cluster_hardening.cis_benchmark import CISBenchmarkChecker
+from .checks.cluster_hardening.admission_controller import AdmissionControllerChecker
+from .checks.cluster_hardening.rbac import RBACChecker
+from .checks.cluster_hardening.network_policy import NetworkPolicyChecker
+
+# System Hardening
+from .checks.system_hardening.node_security import NodeSecurityChecker
+from .checks.system_hardening.runtime_security import RuntimeSecurityChecker
+from .checks.system_hardening.gvisor import GVisorChecker
+
+# Minimize Microservice Vulnerabilities
+from .checks.microservice.container_security import ContainerSecurityChecker
+from .checks.microservice.pod_security import PodSecurityChecker
+from .checks.microservice.secrets import SecretsChecker
+
+# Supply Chain Security
+from .checks.supply_chain.image_security import ImageSecurityChecker
+from .checks.supply_chain.sbom import SBOMChecker
+
+# Monitoring, Logging and Runtime Security
+from .checks.monitoring.audit import AuditChecker
+from .checks.monitoring.falco import FalcoChecker
 
 class SecurityScanner:
     """Main security scanner that coordinates all checks."""
@@ -20,12 +37,29 @@ class SecurityScanner:
     def __init__(self):
         self.console = Console()
         self.checkers = [
-            PodSecurityChecker(),
+            # Cluster Setup and Hardening
             CISBenchmarkChecker(),
             AdmissionControllerChecker(),
-            ContainerSecurityScanner(),
+            RBACChecker(),
+            NetworkPolicyChecker(),
+            
+            # System Hardening
+            NodeSecurityChecker(),
+            RuntimeSecurityChecker(),
             GVisorChecker(),
-            # Add other checkers as they are created
+            
+            # Minimize Microservice Vulnerabilities
+            ContainerSecurityChecker(),
+            PodSecurityChecker(),
+            SecretsChecker(),
+            
+            # Supply Chain Security
+            ImageSecurityChecker(),
+            SBOMChecker(),
+            
+            # Monitoring, Logging and Runtime Security
+            AuditChecker(),
+            FalcoChecker(),
         ]
 
     def run_all_checks(self, namespace: str = "default") -> List[Dict]:
@@ -39,21 +73,48 @@ class SecurityScanner:
                 total=total_checks
             )
             
+            # Group checkers by category for better reporting
+            categories = {
+                "Cluster Setup and Hardening": [],
+                "System Hardening": [],
+                "Minimize Microservice Vulnerabilities": [],
+                "Supply Chain Security": [],
+                "Monitoring, Logging and Runtime Security": []
+            }
+            
             for checker in self.checkers:
                 checker_name = checker.__class__.__name__
+                category = self._get_checker_category(checker)
+                
                 progress.update(
                     task,
                     advance=1,
-                    description=f"Running {checker_name}..."
+                    description=f"Running {category} - {checker_name}..."
                 )
                 
                 try:
                     issues = checker.run(namespace)
+                    categories[category].extend(issues)
                     all_issues.extend(issues)
                 except Exception as e:
                     self.console.print(f"[red]Error in {checker_name}: {e}[/red]")
         
         return all_issues
+
+    def _get_checker_category(self, checker) -> str:
+        """Get the category for a checker based on its module path."""
+        module_path = checker.__class__.__module__
+        if "cluster_hardening" in module_path:
+            return "Cluster Setup and Hardening"
+        elif "system_hardening" in module_path:
+            return "System Hardening"
+        elif "microservice" in module_path:
+            return "Minimize Microservice Vulnerabilities"
+        elif "supply_chain" in module_path:
+            return "Supply Chain Security"
+        elif "monitoring" in module_path:
+            return "Monitoring, Logging and Runtime Security"
+        return "Uncategorized"
 
     def display_results(self, issues: List[Dict]):
         """Display the results in a formatted table."""

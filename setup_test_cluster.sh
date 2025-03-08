@@ -90,12 +90,7 @@ kubectl apply -f security-configs/secrets/sealed-secret.yaml
 
 # Run KubeLinter checks
 echo -e "${GREEN}Running KubeLinter security checks...${NC}"
-kube-linter lint \
-    --do-not-auto-add-defaults \
-    --add-all-built-in \
-    --format=yaml \
-    --output=security-report.yaml \
-    security-configs/
+kube-linter lint --config .kube-linter.yaml security-configs/ 2>&1 | tee security-report.txt
 
 # Clean up
 rm pub-cert.pem

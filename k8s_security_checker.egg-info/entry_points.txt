@@ -1,0 +1,3 @@
+[console_scripts]
+k8s-security-check = k8s_security_checker.main:main
+

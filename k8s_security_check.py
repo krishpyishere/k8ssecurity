@@ -29,7 +29,6 @@ class K8sSecurityChecker:
             # Check for security tools
             self.has_syft = self._check_tool_installed("syft")
             self.has_grype = self._check_tool_installed("grype")
-            self.has_kube_linter = self._check_tool_installed("kube-linter")
         except Exception as e:
             print(f"Error initializing Kubernetes client: {e}")
             sys.exit(1)
@@ -57,57 +56,33 @@ class K8sSecurityChecker:
                     print("1. Exit the root session")
                     print("2. Run the script as your regular user")
                     print(f"3. Install {tool_name} manually with:")
-                    if tool_name == "kube-linter":
-                        print("   brew install kube-linter")
-                    else:
-                        print(f"   brew tap anchore/{tool_name}")
-                        print(f"   brew install {tool_name}")
+                    print(f"   brew tap anchore/{tool_name}")
+                    print(f"   brew install {tool_name}")
                 else:
                     try:
-                        if tool_name == "kube-linter":
-                            subprocess.run(["brew", "install", "kube-linter"], check=True)
-                        else:
-                            subprocess.run(["brew", "tap", f"anchore/{tool_name}"], check=True)
-                            subprocess.run(["brew", "install", tool_name], check=True)
+                        subprocess.run(["brew", "tap", f"anchore/{tool_name}"], check=True)
+                        subprocess.run(["brew", "install", tool_name], check=True)
                         print(f"[green]{tool_name} successfully installed![/green]")
                         return True
                     except subprocess.CalledProcessError as e:
                         print(f"[red]Error installing {tool_name}: {e}[/red]")
                         print(f"\n[yellow]Please install {tool_name} manually:[/yellow]")
-                        if tool_name == "kube-linter":
-                            print("brew install kube-linter")
-                        else:
-                            print(f"brew tap anchore/{tool_name}")
-                            print(f"brew install {tool_name}")
+                        print(f"brew tap anchore/{tool_name}")
+                        print(f"brew install {tool_name}")
             else:  # Linux
                 try:
-                    if tool_name == "kube-linter":
-                        # For Linux, we'll install to user's local bin directory
-                        user_bin_dir = str(Path.home() / ".local" / "bin")
-                        Path(user_bin_dir).mkdir(parents=True, exist_ok=True)
-                        
-                        subprocess.run([
-                            "curl", "-L",
-                            "https://github.com/stackrox/kube-linter/releases/latest/download/kube-linter-linux.tar.gz",
-                            "-o", f"{user_bin_dir}/kube-linter.tar.gz"
-                        ], check=True)
-                        subprocess.run(["tar", "xzf", f"{user_bin_dir}/kube-linter.tar.gz", "-C", user_bin_dir], check=True)
-                        subprocess.run(["chmod", "+x", f"{user_bin_dir}/kube-linter"], check=True)
-                        # Clean up
-                        Path(f"{user_bin_dir}/kube-linter.tar.gz").unlink()
-                    else:
-                        # For Syft and Grype, install to user's local bin
-                        install_script = f"https://raw.githubusercontent.com/anchore/{tool_name}/main/install.sh"
-                        subprocess.run([
-                            "curl", "-sSfL", install_script,
-                            "-o", f"/tmp/{tool_name}-install.sh"
-                        ], check=True)
-                        subprocess.run([
-                            "sh", f"/tmp/{tool_name}-install.sh",
-                            "-b", str(Path.home() / ".local" / "bin")
-                        ], check=True)
-                        # Clean up
-                        Path(f"/tmp/{tool_name}-install.sh").unlink()
+                    # For Syft and Grype, install to user's local bin
+                    install_script = f"https://raw.githubusercontent.com/anchore/{tool_name}/main/install.sh"
+                    subprocess.run([
+                        "curl", "-sSfL", install_script,
+                        "-o", f"/tmp/{tool_name}-install.sh"
+                    ], check=True)
+                    subprocess.run([
+                        "sh", f"/tmp/{tool_name}-install.sh",
+                        "-b", str(Path.home() / ".local" / "bin")
+                    ], check=True)
+                    # Clean up
+                    Path(f"/tmp/{tool_name}-install.sh").unlink()
                     
                     print(f"[green]{tool_name} successfully installed![/green]")
                     # Add the local bin to PATH if not already there
@@ -118,12 +93,7 @@ class K8sSecurityChecker:
                 except subprocess.CalledProcessError as e:
                     print(f"[red]Error installing {tool_name}: {e}[/red]")
                     print(f"\n[yellow]Please install {tool_name} manually:[/yellow]")
-                    if tool_name == "kube-linter":
-                        print(f"mkdir -p ~/.local/bin")
-                        print(f"curl -L https://github.com/stackrox/kube-linter/releases/latest/download/kube-linter-linux.tar.gz | tar xzf - -C ~/.local/bin")
-                        print(f"chmod +x ~/.local/bin/kube-linter")
-                    else:
-                        print(f"curl -sSfL https://raw.githubusercontent.com/anchore/{tool_name}/main/install.sh | sh -s -- -b ~/.local/bin")
+                    print(f"curl -sSfL https://raw.githubusercontent.com/anchore/{tool_name}/main/install.sh | sh -s -- -b ~/.local/bin")
             
             return False
 
@@ -443,83 +413,6 @@ class K8sSecurityChecker:
             
         return issues
 
-    def check_kube_linter(self, namespace: str = "default") -> List[Dict]:
-        """Run KubeLinter checks on the namespace."""
-        issues = []
-
-        if not self.has_kube_linter:
-            issues.append({
-                "pod": "N/A",
-                "container": "System",
-                "issue": ("KubeLinter not installed. Install with:\n"
-                         "# For macOS:\nbrew install kube-linter\n"
-                         "# For Linux:\n"
-                         "curl -L https://github.com/stackrox/kube-linter/releases/latest/download/kube-linter-linux.tar.gz | tar xvzf - -C /usr/local/bin\n"
-                         "chmod +x /usr/local/bin/kube-linter"),
-                "severity": "HIGH"
-            })
-            return issues
-
-        try:
-            # Create a temporary file to store namespace resources
-            with tempfile.NamedTemporaryFile(suffix='.yaml') as temp_file:
-                # Export namespace resources to the temp file
-                export_cmd = f"kubectl get all -n {namespace} -o yaml > {temp_file.name}"
-                subprocess.run(export_cmd, shell=True, check=True)
-
-                # Run kube-linter with all checks enabled
-                print(f"\nRunning KubeLinter analysis on namespace {namespace}...")
-                linter_cmd = ["kube-linter", "lint", 
-                            "--format", "json",
-                            "--include-all",
-                            temp_file.name]
-                
-                result = subprocess.run(linter_cmd, capture_output=True, text=True)
-                
-                if result.returncode == 0:
-                    lint_data = json.loads(result.stdout)
-                    
-                    # Process KubeLinter findings
-                    for report in lint_data.get("Reports", []):
-                        # Map KubeLinter severity to our scale
-                        severity_map = {
-                            "error": "HIGH",
-                            "warning": "MEDIUM",
-                            "info": "LOW"
-                        }
-                        
-                        # Extract object details
-                        object_info = report.get("Object", {})
-                        object_name = object_info.get("Name", "N/A")
-                        object_kind = object_info.get("K8sObject", {}).get("Kind", "Resource")
-                        
-                        # Get remediation
-                        remediation = report.get("Remediation", "No specific remediation provided")
-                        
-                        issues.append({
-                            "pod": f"{object_kind}/{object_name}",
-                            "container": report.get("Check", "N/A"),
-                            "issue": f"{report.get('Description', 'No description')}\nRemediation: {remediation}",
-                            "severity": severity_map.get(report.get("Severity", "warning"), "MEDIUM")
-                        })
-                else:
-                    issues.append({
-                        "pod": "N/A",
-                        "container": "KubeLinter",
-                        "issue": f"Error running KubeLinter: {result.stderr}",
-                        "severity": "INFO"
-                    })
-
-        except Exception as e:
-            issues.append({
-                "pod": "N/A",
-                "container": "KubeLinter",
-                "issue": f"Error during KubeLinter analysis: {str(e)}",
-                "severity": "INFO"
-            })
-
-        return issues
-
     def display_results(self, issues: List[Dict]):
         if not issues:
             self.console.print("\n[bright_green]No security issues found![/bright_green]")
@@ -774,17 +667,15 @@ class K8sSecurityChecker:
 def main():
     checker = K8sSecurityChecker()
     
+    # Initialize progress bar
     with Progress() as progress:
-        task = progress.add_task("[cyan]Scanning Kubernetes cluster for security issues...", total=9)  # Updated total
+        task = progress.add_task("[cyan]Running security checks...", total=7)
         
         all_issues = []
         
-        # Run all security checks
+        # Run security checks
         progress.update(task, advance=1, description="Checking pod security...")
         all_issues.extend(checker.check_pod_security())
-        
-        progress.update(task, advance=1, description="Running KubeLinter checks...")
-        all_issues.extend(checker.check_kube_linter())
         
         progress.update(task, advance=1, description="Checking NodePort exposure...")
         all_issues.extend(checker.check_nodeport_exposure())
@@ -795,16 +686,16 @@ def main():
         progress.update(task, advance=1, description="Checking network policies...")
         all_issues.extend(checker.check_network_policies())
         
-        progress.update(task, advance=1, description="Running CIS benchmark...")
+        progress.update(task, advance=1, description="Running CIS benchmark checks...")
         all_issues.extend(checker.run_cis_benchmark())
         
-        progress.update(task, advance=1, description="Checking sensitive keys...")
+        progress.update(task, advance=1, description="Checking for sensitive keys...")
         all_issues.extend(checker.check_sensitive_keys())
         
-        progress.update(task, advance=1, description="Analyzing Software Bill of Materials...")
+        progress.update(task, advance=1, description="Checking SBOM...")
         all_issues.extend(checker.check_sbom())
         
-        progress.update(task, advance=1, description="Generating report...")
+        progress.update(task, completed=True)
     
     # Display results
     checker.display_results(all_issues)

@@ -12,6 +12,8 @@ kind: Pod
 metadata:
   name: security-test-pod
   namespace: test-security
+  labels:
+    app: test-app
 spec:
   securityContext:
     runAsNonRoot: true
@@ -22,6 +24,7 @@ spec:
     image: nginx:1.21
     securityContext:
       allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
       capabilities:
         drop:
         - ALL

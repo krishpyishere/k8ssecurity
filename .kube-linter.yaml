@@ -1,18 +1,21 @@
 checks:
-  addAllBuiltIn: true
-  exclude:
-    - "no-node-affinity"  # We're using a test cluster
-    - "no-readiness-probe"  # Not needed for test pods
-    - "no-liveness-probe"  # Not needed for test pods
-    - "unset-cpu-requirements"  # We have default resource limits
-    - "unset-memory-requirements"  # We have default resource limits
+  - name: "no-node-affinity"
+    disable: true
+  - name: "no-readiness-probe"
+    disable: true
+  - name: "no-liveness-probe"
+    disable: true
+  - name: "unset-cpu-requirements"
+    disable: true
+  - name: "unset-memory-requirements"
+    disable: true
 
 customChecks: {}
 
 settings:
-  includePaths:
+  includePatterns:
     - "security-configs/**/*.yaml"
-  excludePaths: []
+  excludePatterns: []
   minSeverity: "warning"
 
 # Report format

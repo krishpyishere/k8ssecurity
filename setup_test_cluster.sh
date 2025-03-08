@@ -16,7 +16,7 @@ fi
 
 # Install required tools
 echo -e "${GREEN}Installing required tools...${NC}"
-tools=("kind" "kubectl" "kubeseal")
+tools=("kind" "kubectl" "kubeseal" "kube-linter")
 for tool in "${tools[@]}"; do
     if ! command -v $tool &> /dev/null; then
         echo -e "${YELLOW}Installing $tool...${NC}"
@@ -87,6 +87,10 @@ kubeseal --format=yaml --cert=pub-cert.pem \
 
 # Apply the sealed secret
 kubectl apply -f security-configs/secrets/sealed-secret.yaml
+
+# Run KubeLinter checks
+echo -e "${GREEN}Running KubeLinter security checks...${NC}"
+kube-linter lint security-configs/ --config .kube-linter.yaml
 
 # Clean up
 rm pub-cert.pem

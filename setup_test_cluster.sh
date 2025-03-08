@@ -6,7 +6,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}Setting up local Kubernetes test cluster...${NC}"
+echo -e "${GREEN}Setting up secure Kubernetes environment...${NC}"
 
 # Check if Homebrew is installed
 if ! command -v brew &> /dev/null; then
@@ -14,151 +14,91 @@ if ! command -v brew &> /dev/null; then
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 fi
 
-# Install kind if not present
-if ! command -v kind &> /dev/null; then
-    echo -e "${YELLOW}Installing kind...${NC}"
-    brew install kind
+# Install required tools
+echo -e "${GREEN}Installing required tools...${NC}"
+tools=("kind" "kubectl" "kubeseal")
+for tool in "${tools[@]}"; do
+    if ! command -v $tool &> /dev/null; then
+        echo -e "${YELLOW}Installing $tool...${NC}"
+        brew install $tool
+    else
+        echo -e "${GREEN}$tool already installed${NC}"
+    fi
+done
+
+# Create kind cluster if it doesn't exist
+if ! kind get clusters | grep -q "security-test"; then
+    echo -e "${GREEN}Creating Kubernetes cluster...${NC}"
+    kind create cluster --name security-test --config kind-config.yaml
+else
+    echo -e "${YELLOW}Cluster 'security-test' already exists${NC}"
 fi
-
-# Install kubectl if not present
-if ! command -v kubectl &> /dev/null; then
-    echo -e "${YELLOW}Installing kubectl...${NC}"
-    brew install kubectl
-fi
-
-# Install Syft if not present
-if ! command -v syft &> /dev/null; then
-    echo -e "${YELLOW}Installing Syft...${NC}"
-    brew tap anchore/syft
-    brew install syft
-fi
-
-# Install Grype if not present
-if ! command -v grype &> /dev/null; then
-    echo -e "${YELLOW}Installing Grype...${NC}"
-    brew tap anchore/grype
-    brew install grype
-fi
-
-# Install KubeLinter if not present
-if ! command -v kube-linter &> /dev/null; then
-    echo -e "${YELLOW}Installing KubeLinter...${NC}"
-    brew install kube-linter
-fi
-
-# Create kind cluster configuration
-cat << EOF > kind-config.yaml
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-nodes:
-- role: control-plane
-- role: worker
-- role: worker
-EOF
-
-# Create the cluster
-echo -e "${YELLOW}Creating Kubernetes cluster...${NC}"
-kind create cluster --name security-test --config kind-config.yaml
 
 # Wait for cluster to be ready
-echo -e "${YELLOW}Waiting for cluster to be ready...${NC}"
-kubectl wait --for=condition=Ready nodes --all --timeout=300s
+echo "Waiting for cluster to be ready..."
+kubectl wait --for=condition=Ready nodes --all --timeout=60s
 
-# Create some test resources for security scanning
-echo -e "${YELLOW}Creating test resources...${NC}"
+# Install NGINX Ingress Controller
+echo -e "${GREEN}Installing NGINX Ingress Controller...${NC}"
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/cloud/deploy.yaml
 
-# Create a test namespace
-kubectl create namespace test-security
+# Install Sealed Secrets Controller
+echo -e "${GREEN}Installing Sealed Secrets Controller...${NC}"
+kubectl apply -f https://github.com/bitnami-labs/sealed-secrets/releases/download/v0.24.5/controller.yaml
 
-# Create a pod with security issues
-cat << EOF | kubectl apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: security-test-pod
-  namespace: test-security
-spec:
-  containers:
-  - name: privileged-container
-    image: nginx
-    securityContext:
-      privileged: true
-  - name: root-container
-    image: nginx
-    securityContext:
-      runAsNonRoot: false
-  - name: no-limits
-    image: nginx
-EOF
+# Wait for controllers to be ready
+echo "Waiting for controllers to be ready..."
+kubectl -n ingress-nginx wait --for=condition=Ready pod --selector=app.kubernetes.io/component=controller --timeout=90s
+kubectl -n kube-system wait --for=condition=Ready pod --selector=name=sealed-secrets-controller --timeout=90s
 
-# Create a service with NodePort
-cat << EOF | kubectl apply -f -
-apiVersion: v1
-kind: Service
-metadata:
-  name: test-service
-  namespace: test-security
-spec:
-  type: NodePort
-  ports:
-  - port: 80
-    targetPort: 80
-    nodePort: 30080
-  selector:
-    app: test
-EOF
+# Apply security configurations
+echo -e "${GREEN}Applying security configurations...${NC}"
 
-# Create an overly permissive RBAC role
-cat << EOF | kubectl apply -f -
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: overly-permissive-role
-rules:
-- apiGroups: ["*"]
-  resources: ["*"]
-  verbs: ["*"]
-EOF
+# Create namespace and pod security policies
+echo "Applying pod security configurations..."
+kubectl apply -f security-configs/pod-security/secure-pod.yaml
 
-# Create a pod with sensitive mounts
-cat << EOF | kubectl apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: sensitive-mounts-pod
-  namespace: test-security
-spec:
-  containers:
-  - name: sensitive-container
-    image: nginx
-    volumeMounts:
-    - name: docker-socket
-      mountPath: /var/run/docker.sock
-  volumes:
-  - name: docker-socket
-    hostPath:
-      path: /var/run/docker.sock
-EOF
+# Apply RBAC configuration
+echo "Applying RBAC configurations..."
+kubectl apply -f security-configs/rbac/restricted-role.yaml
 
-# Create a pod with DinD
-cat << EOF | kubectl apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: dind-pod
-  namespace: test-security
-spec:
-  containers:
-  - name: dind
-    image: docker:dind
-    securityContext:
-      privileged: true
-EOF
+# Apply network policies to all namespaces
+echo "Applying network policies..."
+NAMESPACES=$(kubectl get namespaces -o jsonpath='{.items[*].metadata.name}')
+for ns in $NAMESPACES; do
+    echo "Applying network policies to namespace: $ns"
+    # Replace namespace in network policies template and apply
+    sed "s/test-security/$ns/g" security-configs/network-policies/default-policies.yaml | kubectl apply -f -
+done
 
-echo -e "${GREEN}Test cluster setup complete!${NC}"
-echo -e "${GREEN}You can now run your security checker against the 'test-security' namespace${NC}"
-echo -e "${YELLOW}To test the security checker, run:${NC}"
-echo -e "k8s-security-check -n test-security"
-echo
+# Apply ingress configuration
+echo "Applying ingress configurations..."
+kubectl apply -f security-configs/ingress/secure-ingress.yaml
+
+# Create and encrypt secrets
+echo "Creating and encrypting secrets..."
+# Get the public cert from the controller
+kubeseal --fetch-cert > pub-cert.pem
+
+# Create sealed secret from template
+kubeseal --format=yaml --cert=pub-cert.pem \
+    < security-configs/secrets/secret-template.yaml \
+    > security-configs/secrets/sealed-secret.yaml
+
+# Apply the sealed secret
+kubectl apply -f security-configs/secrets/sealed-secret.yaml
+
+# Clean up
+rm pub-cert.pem
+
+echo -e "${GREEN}Setup complete!${NC}"
 echo -e "${YELLOW}To delete the cluster when done:${NC}"
-echo -e "kind delete cluster --name security-test" 
+echo "kind delete cluster --name security-test"
+
+# Install Python dependencies for security checker
+echo -e "${GREEN}Installing Python dependencies...${NC}"
+python3 -m pip install -r requirements.txt
+python3 -m pip install -e .
+
+echo -e "${GREEN}You can now run the security checker with:${NC}"
+echo "python3 k8s_security_check.py -n test-security" 
